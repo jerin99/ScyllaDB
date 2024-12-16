@@ -44,6 +44,8 @@ SELECT * FROM comment_replies WHERE comment_id = ?;
 INSERT INTO post_comments_by_score (post_id, score, created_at, comment_id, user_id, username, profile_picture, content)
 VALUES(uuid(), 10, toTimestamp(now()), uuid(), uuid(), 'john', 'profile_pic_john');
 
+-- In the programming language, the likes and dislikes can be take for the comment and the create a new score and submit to this table.
+
 
 -- 12. Selecting top rated comments
 SELECT * FROM post_comments_by_score WHERE post_id = ?;
