@@ -1,69 +1,103 @@
--- 1. Inserting a new comment
-INSERT INTO post_comments_by_time (post_id, created_at, comment_id, user_id, username, profile_picture, content)
-VALUES (uuid(), toTimestamp(now()), uuid(), uuid(), 'john', 'profile_pic_john')
+-- 1. For total comments
+SELECT total_comments 
+FROM total_comments 
+WHERE post_id = ?;
 
 
--- 2. Selecting a new comment
-SELECT * from post_comments_by_time where post_id = ?;
+-- 2. For retrieving comments by pagination (200 each)
+SELECT
+    comment_id, 
+    created_at, 
+    user_id, 
+    user_profile_picture, 
+    content, 
+    total_likes, 
+    total_dislikes, 
+    total_replies, 
+    score
+FROM post_comments
+WHERE post_id = ?
+LIMIT 200;
+
+-- With pagination, above query will fetch all details related to a post's comments in a single call.
+
+-- 3. For fetching replies for above fetched comments
+SELECT 
+    reply_id, 
+    created_at, 
+    user_id,
+    user_profile_picture,
+    content, 
+    total_likes, 
+    total_dislikes
+FROM comment_replies 
+WHERE post_id = ? AND parent_comment_id = ?
+LIMIT 50;
+
+-- 4. Check user interaction
+SELECT interaction_type
+FROM comment_user_interactions
+WHERE comment_id = ? AND user_id IN (?, ?, ?, ?);
+
+-- Check for likes dislikes
+SELECT comment_id, interaction_type, user_id
+FROM comment_user_interactions
+WHERE comment_id IN (?, ?, ?, ?);
+
+-- 4. Insert a new comment
+BEGIN BATCH
+    INSERT INTO post_comments (
+        post_id, comment_id, created_at, user_id, username, user_profile_picture, 
+        content, total_likes, total_dislikes, total_replies, score, parent_comment_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?);
+    
+    UPDATE total_comments
+    SET total_comments = total_comments + 1
+    WHERE post_id = ?;
+APPLY BATCH;
+
+-- Above statement will insert a comment and also update the total comment in a single batch.
 
 
--- 3. Updating the likes on a count
-UPDATE comment_likes_counter SET likes_count = likes_count+1 WHERE comment_id = ?;
+-- 5. Insert a reply
+BEGIN BATCH
+    INSERT INTO comment_replies (
+        parent_comment_id, reply_id, created_at, user_id, username, user_profile_picture, 
+        content, total_likes, total_dislikes, likes_user_ids, dislikes_user_ids
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, [], []);
+
+    UPDATE post_comments
+    SET total_replies = total_replies + 1
+    WHERE post_id = ? AND comment_id = ?;
+
+    UPDATE total_comments
+    SET total_comments = total_comments + 1
+    WHERE post_id = ?;
+APPLY BATCH;
+
+-- Above statement will insert a reply for a specific comment and also update the total comments and total replies in a single batch.
 
 
--- 4. Selecting the likes count
-SELECT likes_count FROM comment_likes_counter WHERE comment_id = ?;
+-- 6. Insert a like or a dislike
+BEGIN BATCH
+    INSERT INTO comment_user_interactions(
+        comment_id,
+        user_id,
+        interaction_type,
+        created_at
+    ) VALUES(?, ?, ?, toTimeStamp(now())) IF NOT EXISTS;
 
+    UPDATE post_comments
+    SET
+        total_likes = total_likes+1
+        score = ((total_likes * 10) - (total_dislikes * 5)) + (total_replies * 2) - (dateDiffInHours(created_at, now()) / 24)
+        -- I think above score calculation will be better to do in backend language as it will increase computation for db.
+    WHERE post_id = ? AND comment_id = ?;
+    
+APPLY BATCH;
 
--- 5. Updating the dislikes on a count
-UPDATE comment_dislikes_counter SET dislikes_count = dislikes_count+1 WHERE comment_id = ?;
-
-
--- 6. Selecting the dislikes count
-SELECT dislikes_count FROM comment_dislikes_counter WHERE comment_id = ?;
-
-
--- 7. Update the count of replies on a comment
-UPDATE comment_replies_counter SET replies_count = replies_count+1 WHERE comment_id = ?;
-
-
--- 8. Select the count of replies on a comment
-SELECT replies_count FROM comment_replies_counter WHERE comment_id = ?;
-
-
--- 9. Insert a reply for a comment
-INSERT INTO comment_replies (comment_id, created_at, reply_id, user_id, username, profile_picture, content)
-VALUES (uuid(), toTimestamp(now()), uuid(), uuid(), 'jane', 'profile_pic_jane');
-
-
--- 10. Select the replies for a comment
-SELECT * FROM comment_replies WHERE comment_id = ?;
-
-
--- 11. Inserting data for fetching top comments.
-INSERT INTO post_comments_by_score (post_id, score, created_at, comment_id, user_id, username, profile_picture, content)
-VALUES(uuid(), 10, toTimestamp(now()), uuid(), uuid(), 'john', 'profile_pic_john');
-
--- In the programming language, the likes and dislikes can be take for the comment and the create a new score and submit to this table.
-
-
--- 12. Selecting top rated comments
-SELECT * FROM post_comments_by_score WHERE post_id = ?;
-
-
--- 13. Inserting data for duplicate like check
-INSERT INTO comment_likes_by_user (comment_id, user_id, created_at)
-VALUES (uuid(), uuid(), toTimestamp(now()));
-
-
--- 14. For checking if a user has already liked for a post
-SELECT * FROM comment_likes_by_user WHERE comment_id = ?;
-
-
--- 15. Inserting data for duplicate dislike check
-INSERT INTO comment_dislikes_by_user (comment_id, user_id, created_at)
-VALUES (uuid(), uuid(), toTimestamp(now()));
-
-
--- 16. For checking if a user has already disliked for a post
-SELECT * FROM comment_dislikes_by_user WHERE comment_id = ?;
+-- Above code will update liked, dislikes and also score for a specific comment based on the interaction.
+-- Updated algorithm for score to point based approach
+-- SET score = 
+--     ((total_likes * 10) - (total_dislikes * 5)) + (total_replies * 2) - (created_time_hour - current_hour)/24
+-- It will also check if a user has already liked or disliked a comment and will only allow if not.
